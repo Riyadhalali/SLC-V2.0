@@ -31,11 +31,12 @@ timer 0    for load off give some time to load
 0x30 : minutes timer 2 start
 0x31 : hours timer 2 start
 0x32 : minutes timer 2 stop
-
+0x33-0x36: Mini battery Voltage Timr 2
+0x37~0x40 : start up battery voltage timer 2
+0x41-0x42: startup timer 2
+0x43~44: cut time timer 2
 */
-
-
- /*
+/*
 P00: timer on
 P01 : timer off
 P02 : set battery cut down voltage
@@ -50,7 +51,6 @@ P10: calibrate battery voltage
 P11: set ds time
 p12: smart mode
 p13 : smart mode number of fails
-
 */
 //------------------------------------------------------------------------------
 #include "stdint.h"
@@ -66,6 +66,7 @@ p13 : smart mode number of fails
 #define Display_1 PORTD.B4
 #define Display_2 PORTD.B5
 #define Display_3 PORTD.B6
+#define Grid_indicator PORTA.B0
 //-------------------------------Display----------------------------------------
 char array[]={0xC0,0xF9,0xA4,0xB0,0x99,0x92,0x82,0xF8,0x80,0x90};  //Common Anode Without dp
 //-------------------------------Variables--------------------------------------
@@ -89,7 +90,7 @@ float Battery_Voltage;
 char BatteryVoltageSystem=0; // to save the battery voltage system if it is 12v/24v/48v
 unsigned int ADC_Value;   // adc value for battery voltage
 float Vin_Battery;      //voltage of battery
-float Mini_Battery_Voltage=0;
+float Mini_Battery_Voltage=0,Mini_Battery_Voltage_2=0;
 char Timer_Enable=1;   // timer 1
 char CorrectionTime_State=0;  // this function to solve the error when battery is low and timer didn't start because of the low battery
 float v; // ac voltage as global variable
@@ -111,6 +112,7 @@ char RunTimersNowState=0;
 unsigned int SecondsRealTime=0;         // for holding reading seconds in real time for ac grid and startup timers
 unsigned int SecondsRealTimePv_ReConnect_T1=0,SecondsRealTimePv_ReConnect_T2=0; // for reactive timers in sequence when timer switch off because off battery and wants to reload
 unsigned int CountSecondsRealTime=0,CountSecondsRealTimePv_ReConnect_T1=0;
+unsigned int CountSecondsRealTime_T2=0,CountSecondsRealTimePv_ReConnect_T2=0;     // for timer 2
 unsigned int realTimeLoop=0;
 bool RunWithOutBattery=false;
 int const ButtonDelay=150;
@@ -121,7 +123,7 @@ char RunOnBatteryVoltageWithoutTimer_Flag=0;
 char RunBatteryVoltgaeWithoutTimer_isOn=0;                // battery voltage is good
 char UPS_Mode=0;                                         // this mode when grid is available and then grid off  it will switch the loads off and then other conditions reload this mode is for run on battery voltage mode   (????? ??????? ??? ?????? ???????? ????? ??? ????? ?? ????? ????? ??? ??? ??? ??????(
 char UPO_Mode=0;                                        // this mode is when grid is available turn loads off directly
-unsigned int Cut_Time=0;  // time for cutting loads off
+unsigned int Cut_Time=0,Cut_Time_T2=0;  // time for cutting loads off
 char LoadsAlreadySwitchedOFF=0;
 char SystemBatteryMode=0;
 unsigned int changeScreen=0;
@@ -133,16 +135,16 @@ unsigned int DisplayBatteryVoltage=0,DisplayHours=0,DisplayMinutes=0;
 unsigned int HoursNow,MinutesNow,SecondsNow;
 //---------------------------Smart Mode Variables-------------------------------
 char SmartMode=0;       // for enabling smart mode or disable
-char SmartModeNumberOfStartUps=0; //to save the relay startsup in variable
-char SmartModeNumberOfFails=0; // user can adjust number of starts up
-char SmartModePeriodOfFailsInSeconds=0; //user can select the time to fails occur into it (Seconds)
-char SmartModePeriodOfFailsInMinutes=0; //user can select the time to fails occur into it (Seconds)
-char SmartModePeriodToReStartInSeconds=0; // user can select time to restart loads after the time is elapsed (Minutes)
-char SmartModePeriodToReStartInMinutes=0;
-char SmartModeStartCountTime=0;  // if the loads failed and smart mode is on activate this variable to start counting time
-char SmartModeBlockCountTime=0; // this variable will allow to start blocking time to activate loads after entering block mode
-char BlockLoadsActivation=0; // this
-char SmartModeFailsUserDefined=0,SmartModeWatchTimerUserDefined=0,SmartModeBlockTimerUserDefined=0;
+char SmartModeNumberOfStartUps=0,SmartModeNumberOfStartUps_T2=0;//to save the relay startsup in variable
+char SmartModeNumberOfFails=0,SmartModeNumberOfFails_T2=0; // user can adjust number of starts up
+char SmartModePeriodOfFailsInSeconds=0,SmartModePeriodOfFailsInSeconds_T2=0; //user can select the time to fails occur into it (Seconds)
+char SmartModePeriodOfFailsInMinutes=0,SmartModePeriodOfFailsInMinutes_T2=0; //user can select the time to fails occur into it (Seconds)
+char SmartModePeriodToReStartInSeconds=0,SmartModePeriodToReStartInSeconds_T2=0; // user can select time to restart loads after the time is elapsed (Minutes)
+char SmartModePeriodToReStartInMinutes=0,SmartModePeriodToReStartInMinutes_T2=0;
+char SmartModeStartCountTime=0,SmartModeStartCountTime_T2=0;  // if the loads failed and smart mode is on activate this variable to start counting time
+char SmartModeBlockCountTime=0,SmartModeBlockCountTime_T2=0; // this variable will allow to start blocking time to activate loads after entering block mode
+char BlockLoadsActivation=0,BlockLoadsActivation_T2=0; // this
+char SmartModeFailsUserDefined=0,SmartModeWatchTimerUserDefined=0,SmartModeBlockTimerUserDefined=0;     //user defined variables
 //-----------------------------------Functions---------------------------------
 void EEPROM_Load();
 void Gpio_Init();
@@ -214,7 +216,10 @@ void SmartModeProgram();             // activate or not smart mode
 void SmartModeNumberOfFailsProgram();    // set number of fails program
 void SmartModeWatchTimerFailsProgram();       // the time to watch the loads in failing
 void SmartModeBlockTimeProgram();     // to time to block loads until it starts
-
+void SetLowBatteryVoltage_T2(); // cut off battery voltage for timer 2
+void SetStartUpLoadsVoltage_T2(); // start up voltage for t2
+void Startup_Timers_T2(); // startup timer 2
+void CutLoadsTime_T2();
 //------------------------------------------------------------------------------
 void Gpio_Init()
 {
@@ -225,9 +230,10 @@ DDRD.B6=1; // display 3
 DDRC.B6=0; // increment as input
 DDRC.B5=0; // decrement as input
 DDRD.B2=0;  // set as input
-DDRD.B1=0; // ac available as input
+DDRD.B3=0; // ac available as input
 DDRA.B4=1; // relay 1 as output
 DDRA.B5=1; // relay 2 as output
+DDRA.B0=1; //  GRID INDICATOR
 }      //------------------------------------------------------------------------------
 void Config()
 {
@@ -305,6 +311,8 @@ if(RunOnBatteryVoltageWithoutTimer_Flag==0)
 {
 matched_timer_1_start=CheckTimeOccuredOn(seconds_lcd_1,minutes_lcd_1,hours_lcd_1);
 matched_timer_1_stop=CheckTimeOccuredOff(seconds_lcd_2,minutes_lcd_2,hours_lcd_2);
+matched_timer_2_start=CheckTimeOccuredOn(seconds_lcd_timer2_start,minutes_lcd_timer2_start,hours_lcd_timer2_start);
+matched_timer_2_stop=CheckTimeOccuredOff(seconds_lcd_timer2_stop,minutes_lcd_timer2_stop,hours_lcd_timer2_stop);
 
 //---------------------------- Timer 1 -----------------------------------------
 //-> turn Load On
@@ -346,9 +354,51 @@ CountSecondsRealTimePv_ReConnect_T1=0;
 Relay_L_Solar=0; // relay off
 }
 }
-} // runs on battery if
+
 //}// end if of ac_available
 //-------------------------- Timer 1 End----------------------------------------
+///--------------------------Timer 2 -------------------------------------------
+//-> turn Load On
+if (matched_timer_2_start==1)
+{
+Timer_2_isOn=1;
+TurnOffLoadsByPass=0;
+//-> when grid is available and timer is on after grid so access the condition to active timer after grid is off
+if (AC_Available==1 && Timer_Enable==1  && Vin_Battery >= StartLoadsVoltage_T2 && RunWithOutBattery==false
+ && RunOnBatteryVoltageWithoutTimer_Flag==0)
+{
+Relay_L_Solar_2=1;
+if (SmartMode==1) SmartModeNumberOfStartUps_T2=1;       // for counting that relay is on
+}
+//-> if run with out battery is selected
+if (AC_Available==1 && Timer_Enable==1  && RunWithOutBattery==true && RunOnBatteryVoltageWithoutTimer_Flag==0 )
+{
+Relay_L_Solar_2=1;
+}
+} // end if ac_available
+//-> Turn Load off
+//------------------------------------------------------------------------------
+if (matched_timer_2_stop==1)
+{
+Timer_2_isOn=0;        // to continue the timer after breakout the timer when grid is available       // to continue the timer after breakout the timer when grid is available
+///EEPROM_write(0x49,0);        //- save it to eeprom if power is cut
+//-> when grid is available and timer is on after grid so access the condition to active timer after grid is off
+if (AC_Available==1 && Timer_Enable==1  &&  RunWithOutBattery==false  && RunOnBatteryVoltageWithoutTimer_Flag==0 )
+{
+//for the turn off there is no need for delay
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0; // relay off
+}
+if (AC_Available==1 && Timer_Enable==1  && RunWithOutBattery==true  && RunOnBatteryVoltageWithoutTimer_Flag==0 )
+{
+//for the turn off there is no need for delay
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0; // relay off
+}
+}
+} // runs on battery if
 //**************************Bypass System**************************************
 
 if(AC_Available==0 && UPO_Mode==0 )
@@ -360,6 +410,11 @@ CountSecondsRealTime=1;
 if(SecondsRealTime >= startupTIme_1 && AC_Available==0)
 {
 Relay_L_Solar=1;
+}
+
+if(SecondsRealTime >= startupTIme_2 && AC_Available==0)
+{
+Relay_L_Solar_2=1;
 }
 } // end function
 //---------------------------UPO Mode-------------------------------------------
@@ -373,10 +428,16 @@ if(AC_Available==0 && LoadsAlreadySwitchedOFF==0)
 {
 LoadsAlreadySwitchedOFF=1;
 Relay_L_Solar=0 ;
+Relay_L_Solar_2=0 ;
 }
 if(SecondsRealTime >= startupTIme_1 && AC_Available==0 && LoadsAlreadySwitchedOFF==1 )
 {
 Relay_L_Solar=1;
+}
+
+if(SecondsRealTime >= startupTIme_2 && AC_Available==0 && LoadsAlreadySwitchedOFF==1 )
+{
+Relay_L_Solar_2 =1;
 }
 }
 //------------------------Functions for reactiving timers------------------------
@@ -384,6 +445,7 @@ Relay_L_Solar=1;
  these function is used for reactiving timers when grid available in the same timer is on or off
 */
 //-> if the  ac is shutdown and timer is steel in the range of being on  so reactive timer 1
+//******************************Timer 1*****************************************
 if (AC_Available==1 && Timer_isOn==1 && Vin_Battery >= StartLoadsVoltage
 && RunWithOutBattery==false && TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 && BlockLoadsActivation==0)
 {
@@ -398,6 +460,23 @@ Relay_L_Solar=1;
 if (SmartMode==1) SmartModeNumberOfStartUps=1;
 }
 }
+//****************************Timer 2*******************************************
+if (AC_Available==1 && Timer_2_isOn==1 && Vin_Battery >= StartLoadsVoltage_T2
+&& RunWithOutBattery==false && TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 && BlockLoadsActivation_T2==0)
+{
+
+//SecondsRealTimePv_ReConnect_T1++;
+CountSecondsRealTimePv_ReConnect_T2=1;
+//Delay_ms(200);
+if (  SecondsRealTimePv_ReConnect_T2 > startupTIme_2)
+{
+
+Relay_L_Solar_2=1;
+if (SmartMode==1) SmartModeNumberOfStartUps_T2=1;
+}
+}
+//------------------------------------------------------------------------------
+//******************************BYPASS MODE TIMER 1*****************************
 //-> FOR BYPASS MODE
 if (AC_Available==1 && Timer_isOn==1  && RunWithOutBattery==true && TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 )
 {
@@ -408,7 +487,19 @@ CountSecondsRealTimePv_ReConnect_T1=1;
 if (  SecondsRealTimePv_ReConnect_T1 > startupTIme_1) Relay_L_Solar=1;
 
 }
+//***************************BYPASS MODE TIMER 2********************************
+if (AC_Available==1 && Timer_2_isOn==1  && RunWithOutBattery==true && TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 )
+{
+//SecondsRealTimePv_ReConnect_T1++;
+CountSecondsRealTimePv_ReConnect_T2=1;
+//Delay_ms(200);
+
+if (  SecondsRealTimePv_ReConnect_T2 > startupTIme_2) Relay_L_Solar_2=1;
+
+}
+//------------------------------------------------------------------------------
 //******************Run on Battery Voltage without Timer Mode is ON*************
+//*******************************TIMER 1****************************************
 if (AC_Available==1  && Vin_Battery >= StartLoadsVoltage && RunWithOutBattery==false
 && TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==1 && BlockLoadsActivation==0)
 {
@@ -419,12 +510,23 @@ if (  SecondsRealTimePv_ReConnect_T1 > startupTIme_1)
 {
 Relay_L_Solar=1;
 if (SmartMode==1) SmartModeNumberOfStartUps=1;
-
 }
 }
-
+//*******************************TIMER 2****************************************
+if (AC_Available==1  && Vin_Battery >= StartLoadsVoltage_T2 && RunWithOutBattery==false
+&& TurnOffLoadsByPass==0 && RunOnBatteryVoltageWithoutTimer_Flag==1 && BlockLoadsActivation_T2==0)
+{
+//SecondsRealTimePv_ReConnect_T1++;
+CountSecondsRealTimePv_ReConnect_T2=1;
+//Delay_ms(200);
+if (  SecondsRealTimePv_ReConnect_T2 > startupTIme_2)
+{
+Relay_L_Solar_2=1;
+if (SmartMode==1) SmartModeNumberOfStartUps_T2=1;
+}
+}
 //--------------------------Turn Off Loads for Low battery----------------------
-
+//********************************TIMER 1 LOW VOLTAGE***************************
 //--Turn Load off when battery Voltage  is Low and AC Not available and Bypass is enabled and timer is enabled
 if (Vin_Battery<=Mini_Battery_Voltage && AC_Available==1  && RunWithOutBattery==false && RunLoadsByBass==0 )
 {
@@ -432,7 +534,13 @@ SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
 Start_Timer_0_A();         // give some time for battery voltage
 }
-
+//******************************TIMER 2 LOW VOLTAGE*****************************
+if (Vin_Battery<=Mini_Battery_Voltage_2 && AC_Available==1  && RunWithOutBattery==false && RunLoadsByBass==0 )
+{
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Start_Timer_0_A();         // give some time for battery voltage
+}
 }// end of check timers
 //******************************************************************************
 //---------------------------------Enter Programs ------------------------------
@@ -447,41 +555,49 @@ while (Set==0)
 {
 //-> Enter First Timer Setting and test for exit button at every screen moving in and out
 //Delay_ms(500);
-SetTimerOn_1();
+SetTimerOn_1();               // program 0
 Delay_ms(500);
-SetTimerOff_1();
+SetTimerOff_1();              // program 1
 Delay_ms(500);
-SetTimerOn_2();
+SetTimerOn_2();              // program 2
 Delay_ms(500);
-SetTimerOff_2();
+SetTimerOff_2();            // program 3
 Delay_ms(500);
-SetLowBatteryVoltage();// program 3 to set low battery voltage
+SetLowBatteryVoltage();     //program 4
 Delay_ms(500);
-SetStartUpLoadsVoltage(); // program 4 to enable timer or disable
+SetLowBatteryVoltage_T2(); // program 5
 Delay_ms(500);
-Startup_Timers();
+SetStartUpLoadsVoltage(); // program 6
 Delay_ms(500);
-RunOnBatteryVoltageWithoutTimer();
+SetStartUpLoadsVoltage_T2(); //program 7
 Delay_ms(500);
-CutLoadsTime();
+Startup_Timers();       // program 8
 Delay_ms(500);
-UPSMode();
+Startup_Timers_T2();    //program 9
 Delay_ms(500);
-UPOMode();
+RunOnBatteryVoltageWithoutTimer();    //program 10
 Delay_ms(500);
-RunAsTimerMode();
+CutLoadsTime();           // program 11
 Delay_ms(500);
-SetBatteryVoltageError();
+CutLoadsTime_T2();        //program 12
 Delay_ms(500);
-SetDS1307_Time();   // program 11
+UPSMode();                 //program 13
 Delay_ms(500);
-SmartModeProgram();    // program 12
+UPOMode();                //program 14
 Delay_ms(500);
-SmartModeNumberOfFailsProgram();      // program 13
+RunAsTimerMode();         // program 15
 Delay_ms(500);
-SmartModeWatchTimerFailsProgram();    // program 14
+SetBatteryVoltageError();    // program 16
 Delay_ms(500);
-SmartModeBlockTimeProgram();          // program 15
+SetDS1307_Time();   // program 17
+Delay_ms(500);
+SmartModeProgram();    // program 18
+Delay_ms(500);
+SmartModeNumberOfFailsProgram();      // program 19
+Delay_ms(500);
+SmartModeWatchTimerFailsProgram();    // program 20
+Delay_ms(500);
+SmartModeBlockTimeProgram();          // program 21
 Delay_ms(500);
 break;   // to break the while
 } // end while
@@ -748,7 +864,7 @@ void SetLowBatteryVoltage()
 {
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0xA4);
+Display_On_7Segment_Character(0x8C,0xC0,0x99);   // program 4
 }
 Delay_ms(500);
 while(Set==0)
@@ -776,13 +892,45 @@ if (Mini_Battery_Voltage<0) Mini_Battery_Voltage=0;
 }// end first while set
 StoreBytesIntoEEprom(0x04,(unsigned short *)&Mini_Battery_Voltage,4);   // save float number to eeprom
 }
+//----------------------Set Low Battery Voltage Timer 2-------------------------
+void SetLowBatteryVoltage_T2()
+{
+while(Set==0)
+{
+Display_On_7Segment_Character(0x8C,0xC0,0x92);    // progranm 5
+}
+Delay_ms(500);
+while(Set==0)
+{
+Display_On_7Segment_Float(Mini_Battery_Voltage_2);  // to indicate program 2
+while (Increment==1 || Decrement==1)
+{
+Display_On_7Segment_Float(Mini_Battery_Voltage_2);  // to indicate program 2
+if (Increment==1)
+{
+//Display_On_7Segment_Float(Mini_Battery_Voltage);  // to indicate program 2
+Delay_ms(150);
+Mini_Battery_Voltage_2+=0.1;
 
+}
+if (Decrement==1)
+{
+//Display_On_7Segment_Float(Mini_Battery_Voltage);  // to indicate program 2
+Delay_ms(150);
+Mini_Battery_Voltage_2-=0.1;
+}
+if (Mini_Battery_Voltage_2>65) Mini_Battery_Voltage_2=0;
+if (Mini_Battery_Voltage_2<0) Mini_Battery_Voltage_2=0;
+} //end wile increment and decrement
+}// end first while set
+StoreBytesIntoEEprom(0x33,(unsigned short *)&Mini_Battery_Voltage_2,4);   // save float number to eeprom
+}
 //---------------------StatrtUp Battery Voltage for Loads-----------------------
 void SetStartUpLoadsVoltage()
 {
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0xB0);
+Display_On_7Segment_Character(0x8C,0xC0,0x82);     // program 6
 }
 Delay_ms(500);;
 while(Set==0)
@@ -809,6 +957,38 @@ if (StartLoadsVoltage<0) StartLoadsVoltage=0;
 }// end first while
 StoreBytesIntoEEprom(0x08,(unsigned short *)&StartLoadsVoltage,4);   // save float number to eeprom
 }
+//-----------------------------Startup voltage for timer 2----------------------
+void SetStartUpLoadsVoltage_T2()
+{
+while(Set==0)
+{
+Display_On_7Segment_Character(0x8C,0xC0,0xF8);     // program 7
+}
+Delay_ms(500);;
+while(Set==0)
+{
+Display_On_7Segment_Float(StartLoadsVoltage_T2);
+while (Increment==1 || Decrement==1)
+{
+Display_On_7Segment_Float(StartLoadsVoltage_T2);
+if (Increment==1)
+{
+Delay_ms(150);
+StartLoadsVoltage_T2+=0.1;
+//Display_On_7Segment_Float(StartLoadsVoltage);
+}
+if (Decrement==1)
+{
+Delay_ms(150);
+StartLoadsVoltage_T2-=0.1;
+//Display_On_7Segment_Float(StartLoadsVoltage);
+}
+if (StartLoadsVoltage_T2>65) StartLoadsVoltage_T2=0;
+if (StartLoadsVoltage_T2<0) StartLoadsVoltage_T2=0;
+} //end wile increment and decrement
+}// end first while
+StoreBytesIntoEEprom(0x37,(unsigned short *)&StartLoadsVoltage_T2,4);   // save float number to eeprom
+}
 //------------------------------ StartUp Timer----------------------------------
 //- > when grid is available and load must turn on they must have time between each
 //-> other so solar inverter don't switch off
@@ -816,7 +996,7 @@ void Startup_Timers()
 {
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0x99);          // program 4
+Display_On_7Segment_Character(0x8C,0xC0,0x80);          // program 8
 }
 Delay_ms(500);
 while(Set==0)
@@ -845,12 +1025,46 @@ if (startupTIme_1<0) startupTIme_1=0;
 } // end while main while set
 StoreBytesIntoEEprom(0x12,(unsigned short *)&startupTIme_1,2);   // save float number to eeprom
 } // end  function
+//-----------------------------Start up timer 2---------------------------------
+void Startup_Timers_T2()
+{
+while(Set==0)
+{
+Display_On_7Segment_Character(0x8C,0xC0,0x90);          // program 9
+}
+Delay_ms(500);
+while(Set==0)
+{
+Display_On_7Segment(startupTIme_2);
+while(Increment==1 || Decrement==1)
+{
+Display_On_7Segment(startupTIme_2);
+if(Increment==1)
+{
+//Delay_ms(ButtonDelay);
+//Display_On_7Segment(startupTIme_1);
+Delay_ms(50);
+startupTIme_2++;
+}
+if(Decrement==1)
+{
+//Delay_ms(ButtonDelay);
+//Display_On_7Segment(startupTIme_1);
+Delay_ms(50);
+startupTIme_2--;
+}
+if(startupTIme_2 > 600  ) startupTIme_2=0;
+if (startupTIme_2<0) startupTIme_2=0;
+} // end  while increment decrement
+} // end while main while set
+StoreBytesIntoEEprom(0x41,(unsigned short *)&startupTIme_2,2);   // save float number to eeprom
+} // end  function
 //-----------------------------Set battery Voltage Error------------------------
 void SetBatteryVoltageError()
 {
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0xC0);  // program 10
+Display_On_7Segment_Character(0x8C,0xF9,0x82);  // program 16
 }
 Delay_ms(500);
 VinBatteryError=Vin_Battery;
@@ -888,7 +1102,7 @@ void RunAsTimerMode()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0x90);        // program 9
+Display_On_7Segment_Character(0x8C,0xF9,0x92);        // program 15
 }
 Delay_ms(500);
 while (Set==0)
@@ -926,7 +1140,7 @@ set_ds1307_hours=ReadHours();          // to read time now
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0xF9);        // program 11
+Display_On_7Segment_Character(0x8C,0xF9,0xF8);        // program 17
 }
 Delay_ms(500);
 while (Set==0)
@@ -1104,7 +1318,7 @@ void RunOnBatteryVoltageWithoutTimer()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0x92);        // program 5
+Display_On_7Segment_Character(0x8C,0xF9,0xC0);        // program 10
 }
 Delay_ms(500);
 while (Set==0)
@@ -1134,7 +1348,7 @@ void CutLoadsTime()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0x82);        // program 6
+Display_On_7Segment_Character(0x8C,0xF9,0xF9);        // program 11
 }
 Delay_ms(500);
 while (Set==0)
@@ -1156,7 +1370,37 @@ Cut_Time--;
 }
 } // end while increment
 } // end first while
-StoreBytesIntoEEprom(0x15,(unsigned short *)&Cut_Time,4);   // save float number to eeprom
+StoreBytesIntoEEprom(0x15,(unsigned short *)&Cut_Time,2);   // save float number to eeprom
+}
+//-------------------------------Cut Time For timer 2 --------------------------
+void CutLoadsTime_T2()
+{
+Delay_ms(500);
+while(Set==0)
+{
+Display_On_7Segment_Character(0x8C,0xF9,0xA4);        // program 12
+}
+Delay_ms(500);
+while (Set==0)
+{
+Display_On_7Segment(Cut_Time_T2);
+//-> to make sure that the value will never be changed until the user press increment or decrement
+while (Increment == 1 || Decrement==1)
+{
+Display_On_7Segment(Cut_Time_T2);
+if (Increment==1)
+{
+delay_ms(50);
+Cut_Time_T2++;
+}
+if (Decrement==1)
+{
+delay_ms(50);
+Cut_Time_T2--;
+}
+} // end while increment
+} // end first while
+StoreBytesIntoEEprom(0x43,(unsigned short *)&Cut_Time_T2,2);   // save float number to eeprom
 }
 //------------------------------UPS Mode----------------------------------------
 /*
@@ -1168,7 +1412,7 @@ void UPSMode()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0xF8);        // program 7
+Display_On_7Segment_Character(0x8C,0xF9,0xB0);        // program 13
 }
 Delay_ms(500);
 while (Set==0)
@@ -1202,7 +1446,7 @@ void UPOMode()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xC0,0x80);        // program 8
+Display_On_7Segment_Character(0x8C,0xF9,0x99);        // program 14
 }
 Delay_ms(500);
 while (Set==0)
@@ -1233,7 +1477,7 @@ void SmartModeProgram()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0xA4);        // program 12
+Display_On_7Segment_Character(0x8C,0xF9,0x80);        // program 18
 }
 Delay_ms(500);
 while (Set==0)
@@ -1264,7 +1508,7 @@ void SmartModeNumberOfFailsProgram()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0xB0);        // program 13
+Display_On_7Segment_Character(0x8C,0xF9,0x90);        // program 19
 }
 Delay_ms(500);
 while (Set==0)
@@ -1295,7 +1539,7 @@ void SmartModeWatchTimerFailsProgram()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0x99);        // program 14
+Display_On_7Segment_Character(0x8C,0xA4,0xC0);        // program 20
 }
 Delay_ms(500);
 while (Set==0)
@@ -1326,7 +1570,7 @@ void SmartModeBlockTimeProgram()
 Delay_ms(500);
 while(Set==0)
 {
-Display_On_7Segment_Character(0x8C,0xF9,0x92);        // program 15
+Display_On_7Segment_Character(0x8C,0xA4,0xF9);        // program 21
 }
 Delay_ms(500);
 while (Set==0)
@@ -1406,8 +1650,9 @@ void Interupt_Timer_0_OFFTime() iv IVT_ADDR_TIMER0_COMP
 {
 SREG_I_Bit=0; // disable interrupts
 Timer_Counter_3++;                // timer for battery voltage
+Timer_Counter_4++;
 Timer_Counter_For_Grid_Turn_Off++;   // timer for switching load off
-
+//*****************************TIMER1*******************************************
 if(Timer_Counter_3==30*Cut_time)   // 1 seconds  for timer counter is 30 counts                7812 / 255 count =  1 second
 {
 if(Vin_Battery<=Mini_Battery_Voltage && AC_Available==1 && RunLoadsByBass==0)
@@ -1427,6 +1672,33 @@ Relay_L_Solar=0;
 SmartModeNumberOfStartUps=0;  // zero the variable
 }
 Timer_Counter_3=0;
+//Stop_Timer_0();
+}
+//************************* TIMER 2 ********************************************
+if(Timer_Counter_4==30*Cut_Time_T2)   // 1 seconds  for timer counter is 30 counts                7812 / 255 count =  1 second
+{
+if(Vin_Battery<=Mini_Battery_Voltage_2 && AC_Available==1 && RunLoadsByBass==0)
+{
+if(SmartMode==1 && SmartModeNumberOfStartUps_T2==1)
+{
+// start time to count
+SmartModeStartCountTime_T2=1;
+// change number of fails
+SmartModeNumberOfFails_T2++;
+//-> block mode
+BlockLoads();
+}
+
+SecondsRealTime=0;
+Relay_L_Solar_2=0;
+SmartModeNumberOfStartUps_T2=0;  // zero the variable
+}
+Timer_Counter_4=0;
+//Stop_Timer_0();
+}
+//------------------------------------------------------------------------------
+if(Timer_Counter_3 > Cut_Time*30 && Timer_Counter_4 > Cut_Time_T2*30)
+{
 Stop_Timer_0();
 }
 SREG_I_Bit=1;
@@ -1448,21 +1720,29 @@ if(period==1) // summer  timer
 if(SystemBatteryMode==12)
 {
 Mini_Battery_Voltage=12.5;
-StartLoadsVoltage=13.5;
+Mini_Battery_Voltage_2=12.7;
+StartLoadsVoltage=13.2;
+StartLoadsVoltage_T2=13.5;
 }
 if(SystemBatteryMode==24)
 {
-Mini_Battery_Voltage=25.0;
-StartLoadsVoltage=27.0;
+Mini_Battery_Voltage=24.5;
+Mini_Battery_Voltage_2=25.0;
+StartLoadsVoltage=26.0;
+StartLoadsVoltage_T2=26.5;
 }
 if(SystemBatteryMode==48)
 {
-Mini_Battery_Voltage=50;
-StartLoadsVoltage=54.0;
+Mini_Battery_Voltage=49.0;
+Mini_Battery_Voltage_2=50.0;
+StartLoadsVoltage=52.0;
+StartLoadsVoltage_T2=54.0;
 }
 
 startupTIme_1 =180;
+startupTIme_2=240;
 Cut_Time=15;
+Cut_Time_T2=15;
 VinBatteryDifference=0.0;
 addError=1;
 //*****************timer 1****************
@@ -1487,9 +1767,13 @@ EEPROM_Write(0x27,12);     // smart mode the watch timer fails
 EEPROM_Write(0x28,15);     // smart mode watch timer block
 //--------------------------------
 StoreBytesIntoEEprom(0x04,(unsigned short *)&Mini_Battery_Voltage,4);   // save float number to eeprom
+StoreBytesIntoEEprom(0x33,(unsigned short *)&Mini_Battery_Voltage_2,4);   // save float number to eeprom
 StoreBytesIntoEEprom(0x08,(unsigned short *)&StartLoadsVoltage,4);
+StoreBytesIntoEEprom(0x37,(unsigned short *)&StartLoadsVoltage_T2,4);
 StoreBytesIntoEEprom(0x12,(unsigned short *)&startupTIme_1,2);
+StoreBytesIntoEEprom(0x41,(unsigned short *)&startupTIme_2,2);
 StoreBytesIntoEEprom(0x15,(unsigned short *)&Cut_Time,2);
+StoreBytesIntoEEprom(0x43,(unsigned short *)&Cut_Time_T2,2);
 StoreBytesIntoEEprom(0x19,(unsigned short *)&VinBatteryDifference,4);
 }
 }
@@ -1497,13 +1781,14 @@ StoreBytesIntoEEprom(0x19,(unsigned short *)&VinBatteryDifference,4);
 void RunTimersNowCheck()
 {
 SREG_I_bit=0;
-if (Button(&PINA,5,1000,1 ) && Button(&PINA,6,1000,0 )) // if increment pressed for 1 second
+if (Button(&PINC,6,1000,1 ) && Button(&PINC,5,1000,0 )) // if increment pressed for 1 second
 {
-RunLoadsByBass=1;
+RunLoadsByBass++;
 if (  RunLoadsByBass==1 ) Relay_L_Solar=1;
+if ( RunLoadsByBass==2) Relay_L_Solar_2=1;
 }
 //---------------------------------Reset to Summer time-------------------------
-if (Button(&PINA,6,1000,1)  && Button(&PINA,5,1000,1))     // up & Down for 1 seconds reset mode
+if (Button(&PINC,6,1000,1)  && Button(&PINC,5,1000,1))     // up & Down for 1 seconds reset mode
 {
 char esc=0;
 EEPROM_FactorySettings(1);        // summer time in this version i deleted winter time
@@ -1526,6 +1811,7 @@ if (Decrement==1 && Increment==0 )
 TurnOffLoadsByPass=1;    // this variable if user shutdown loads it will not reactive  until next timer or restart the controller
 RunLoadsByBass=0;
 Relay_L_Solar=0;
+Relay_L_Solar_2=0;
 }
 }
 SREG_I_bit=1;
@@ -1567,21 +1853,26 @@ if(ReadHours()==hours_lcd_2)
 if(ReadMinutes()<= minutes_lcd_2) Timer_isOn=1;
 }
 }
-/*//-a to turn on loadsinside range
-if (ReadHours() >= hours_lcd_1 && ReadMinutes() >= minutes_lcd_1 && ReadHours() < hours_lcd_2 && RunOnBatteryVoltageWithoutTimer_Flag==0  )
+//----------------------------Timer 2 ------------------------------------------
+//------------------------------Timer 2-----------------------------------------
+if(ReadHours() > hours_lcd_timer2_start && ReadHours()< hours_lcd_timer2_stop)
 {
-Timer_isOn=1;
+Timer_2_isOn=1;
 }
-
-//-b----------------------------------------------------------------------------
-if (ReadHours() >= hours_lcd_1 && ReadMinutes() >= minutes_lcd_1 && ReadHours() == hours_lcd_2  && RunOnBatteryVoltageWithoutTimer_Flag==0)
+//-> seconds compare hours if equal now then compare minutes
+if(ReadHours()== hours_lcd_timer2_start || ReadHours()== hours_lcd_timer2_stop )
 {
-// study the state
-if(ReadMinutes() < minutes_lcd_2)        // starts the load
+if(ReadHours()==hours_lcd_timer2_start)
 {
-Timer_isOn=1;
+//-> minutes must be bigger
+if(ReadMinutes()>=minutes_lcd_timer2_start) Timer_2_isOn=1;
 }
-}*/
+if(ReadHours()==hours_lcd_timer2_stop)
+{
+//-> minutes must be less
+if(ReadMinutes()<minutes_lcd_timer2_stop) Timer_2_isOn=1;
+}
+}
 } // runs on battery voltage
 }  // end function
 //**************************** Check timer out of range ************************
@@ -1589,12 +1880,7 @@ void CheckForTimerActivationOutRange()
 {
 if (RunOnBatteryVoltageWithoutTimer_Flag==0)
 {
- //-a turn off loads out of time range  range
-/*if(ReadHours() >= hours_lcd_1 && ReadMinutes() >= minutes_lcd_1 && ReadHours() >= hours_lcd_2 && ReadMinutes()>=minutes_lcd_2  && RunOnBatteryVoltageWithoutTimer_Flag==0 )
-{
-Timer_isOn=0;
-}*/
-
+//-----------------------------Timer 1 ----------------------------------------
 if (ReadHours() < hours_lcd_1  && ReadHours() < hours_lcd_2 )
 {
 Timer_isOn=0;
@@ -1622,7 +1908,35 @@ Timer_isOn=0;
 }
 }
 }
+//-----------------------------------Timer 2 -----------------------------------
+if (ReadHours() < hours_lcd_timer2_start  && ReadHours() < hours_lcd_timer2_stop )
+{
+Timer_2_isOn=0;
 }
+
+if (ReadHours() > hours_lcd_timer2_start  && ReadHours() > hours_lcd_timer2_stop )
+{
+Timer_2_isOn=0;
+}
+
+
+if (ReadHours()==hours_lcd_timer2_start)
+{
+if(ReadMinutes() < minutes_lcd_timer2_start)
+{
+Timer_2_isOn=0;
+}
+}
+//-> check for hours
+if (ReadHours()==hours_lcd_timer2_stop)
+{
+if(ReadMinutes() > minutes_lcd_timer2_stop)
+{
+Timer_2_isOn=0;
+}
+}
+//--------------------------------End of Second Timer---------------------------
+} // end function
 
 //-------------------Function for turning off loads-----------------------------
 void TurnLoadsOffWhenGridOff()
@@ -1632,6 +1946,7 @@ void TurnLoadsOffWhenGridOff()
  ??? ?????? ???????? ???? ???? ????? ?????? ???? ???? ??????? ????
 
 */
+//*************************************TIMER 1**********************************
 if(AC_Available==1 && Timer_isOn==0 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0  )
 {
 SecondsRealTime=0;
@@ -1641,19 +1956,32 @@ CountSecondsRealTimePv_ReConnect_T1=0;
 Relay_L_Solar=0;
 LoadsAlreadySwitchedOFF=0;
 }
-/*
-UPO Mode:
-??? ???? ???????? ??? ??? ????? ?? ????? ?????? ???????? ??? ?????? ???????? ???? ??????? ????? ??? ????? ????? ???? ??? ?????
-??? ???? ??? ???????? ???? ???? ????? ????? ?????
-???????? ??? ?? ????? ??? ???????? ????? ????? ???? ?????? ??? ????? ??????? ???????? ???? ?????? ??? ???? ??????? ??? ???? ???? ????? ?????
-???? ????? ?????  ?????? ???  290
-*/
+//**********************************TIMER 2*************************************
+if(AC_Available==1 && Timer_2_isOn==0 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0  )
+{
+SecondsRealTime=0;
+CountSecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0;
+LoadsAlreadySwitchedOFF=0;
+}
+//****************************UPO MODE TIMER 1**********************************
 if(AC_Available==1 &&  RunLoadsByBass==0 && UPO_Mode==1 && LoadsAlreadySwitchedOFF==1)
 {
 LoadsAlreadySwitchedOFF=0;
 SecondsRealTime=0;
 SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
+CountSecondsRealTime=0;
+}
+//***************************UPO MODE TIMER 2 **********************************
+if(AC_Available==1 &&  RunLoadsByBass==0 && UPO_Mode==1 && LoadsAlreadySwitchedOFF==1)
+{
+LoadsAlreadySwitchedOFF=0;
+SecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
 CountSecondsRealTime=0;
 }
 //-> end of working on timer mode
@@ -1891,8 +2219,14 @@ if ( DisplayBatteryVoltage > 5300  && DisplayBatteryVoltage < 5600)
 {
 Display_On_7Segment_Minutes(MinutesNow);
 }
+//-> add grid message  if grid is available
+if (DisplayBatteryVoltage> 5600 && DisplayBatteryVoltage < 5900  )
+{
+if(AC_Available==0)   Display_On_7Segment_Character(0x82,0xCF,0xC0);
+else Display_On_7Segment_Battery(Vin_Battery); // update display
 
-if (DisplayBatteryVoltage>5600) DisplayBatteryVoltage=0;
+}
+if (DisplayBatteryVoltage>5900) DisplayBatteryVoltage=0;
 } // endif  of run on battery voltage
 //-> if battery voltage is not enabled don't display time
 else
@@ -1927,44 +2261,29 @@ SREG_I_bit=1; // enable the global interrupt vector
 }
 
 //---------------External Interrupts for INT1 for ac available------------------
-void Interrupt_INT1 () iv IVT_ADDR_INT0
+void Interrupt_INT0 () iv IVT_ADDR_INT0
 {
 SREG_I_Bit=0; // disable interrupts
 
-if (Button(&PIND,3,200,1 ))
+if (Button(&PIND,2,200,1 ))
 {
 SetUpProgram();
 }
 SREG_I_Bit=1; // disable interrupts
-INTF1_bit=1;     //clear  flag
+INTF0_bit=1;     //clear  flag
 }
 
-void Interrupt_INT0_GridOFF() iv IVT_ADDR_INT1
+void Interrupt_INT1_GridOFF() iv IVT_ADDR_INT1
 {
 /*
 when grid goes of make fast turn off loads
 */
 SREG_I_Bit=0; // disable interrupts
 /*
-TIMER MODE WITH UPS IN CUT AC
-timer is  activated but working in timr mode and ups is enabled
-//@note: i can not use this line in turnoffloads grid main function
-*/
-/*if(AC_Available==1 && Timer_isOn==1 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 && UPS_Mode==1)
-{
-SecondsRealTime=0;
-CountSecondsRealTime=0;
-SecondsRealTimePv_ReConnect_T1=0;
-CountSecondsRealTimePv_ReConnect_T1=0;
-Relay_L_Solar=0;
-LoadsAlreadySwitchedOFF=0;
-}*/
-
-/*
 ups mode : if it is activated switch off loads what ever timer is on or off
 run on battery voltage mode is off
-
 */
+//*******************************UPS MODE TIMER 1*******************************
 if(AC_Available==1 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 && UPS_Mode==1  )
 {
 LoadsAlreadySwitchedOFF=0;
@@ -1974,6 +2293,17 @@ SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
 Relay_L_Solar=0;
 }
+//*****************************UPS MODE TIMER 2*********************************
+if(AC_Available==1 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 && UPS_Mode==1  )
+{
+LoadsAlreadySwitchedOFF=0;
+SecondsRealTime=0;
+CountSecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0;
+}
+
 /*
 WORKING IN TIMER MODE BUT TIMER IS OUT OF RANGE
 DON'T MATTER UPS IS ON OR OFF BECAUSE IT WILL TURN OFF LOAD DIRECTLY
@@ -1987,14 +2317,20 @@ CountSecondsRealTimePv_ReConnect_T1=0;
 Relay_L_Solar=0;
 LoadsAlreadySwitchedOFF=0;
 }
-
+if(AC_Available==1 && Timer_2_isOn==0  && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==0 )
+{
+SecondsRealTime=0;
+CountSecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0;
+LoadsAlreadySwitchedOFF=0;
+}
 //******************************************************************************
 //->WORKING ON BATTERY VOLTAGE MODE AND UPS MODE
 //@note: i can not use this line in turnoffloads grid main function
 /*
-ups mode:
-??? ???? ???????? ?????? ??? ??? ????? ?????? ?????? ?????? ????? ???? ???? ?????? ???? ??????? ???????? ???? ????? ??? ? ??? ???? ????? ??? ?? ??? ????? ????? ??? ????? ???
-??? ??? ?????? ???????? ??? ??? ?? ????? ???? ???? ???????? ??? ??? ????? ?? ???? ?????? ????????
+UPS MODE AND RUN ON BATTERY VOLTAGE MODE IS ON
 */
 if(AC_Available==1 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==1 && UPS_Mode==1  )
 {
@@ -2004,6 +2340,15 @@ CountSecondsRealTime=0;
 SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
 Relay_L_Solar=0;
+}
+if(AC_Available==1 && RunLoadsByBass==0 && RunOnBatteryVoltageWithoutTimer_Flag==1 && UPS_Mode==1  )
+{
+LoadsAlreadySwitchedOFF=0;
+SecondsRealTime=0;
+CountSecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+Relay_L_Solar_2=0;
 }
 /*
 UPO Mode:
@@ -2020,9 +2365,17 @@ SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTime=0;
 }
+if(AC_Available==1 &&  RunLoadsByBass==0  && UPO_Mode==1 && LoadsAlreadySwitchedOFF==1)
+{
+LoadsAlreadySwitchedOFF=0;
+SecondsRealTime=0;
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTime=0;
+}
 
 SREG_I_Bit=1; // enable interrupts
-INTF0_bit=1; // clear flag
+INTF1_bit=1; // clear flag
 }
 //------------------------------------------------------------------------------
 //-> timer for reading battery every second
@@ -2048,11 +2401,18 @@ SmartModeTiming();
 
 if (CountSecondsRealTime==1) SecondsRealTime++;                                     // for counting real time for  grid count
 if (CountSecondsRealTimePv_ReConnect_T1==1) SecondsRealTimePv_ReConnect_T1++; // for counting real time for pv connect
+if (CountSecondsRealTimePv_ReConnect_T2==1) SecondsRealTimePv_ReConnect_T2++; // for counting real time for pv connect
 //--Turn Load off when battery Voltage  is Low and AC Not available and Bypass is enabled and timer is enabled
 if (Vin_Battery<Mini_Battery_Voltage && AC_Available==1  && RunWithOutBattery==false && RunLoadsByBass==0)
 {
 SecondsRealTimePv_ReConnect_T1=0;
 CountSecondsRealTimePv_ReConnect_T1=0;
+Start_Timer_0_A();         // give some time for battery voltage
+}
+if (Vin_Battery<Mini_Battery_Voltage_2 && AC_Available==1  && RunWithOutBattery==false && RunLoadsByBass==0)
+{
+SecondsRealTimePv_ReConnect_T2=0;
+CountSecondsRealTimePv_ReConnect_T2=0;
 Start_Timer_0_A();         // give some time for battery voltage
 }
 
@@ -2073,29 +2433,29 @@ if(RunOnBatteryVoltageWithoutTimer_Flag==1 && AC_Available==1)
 {
 // flashing fast
 Delay_ms(200);
-//Grid_indicator=1;
+Grid_indicator=1;
 Delay_ms(200);
-//Grid_indicator=0;
+Grid_indicator=0;
 }
 //-> to indicate time is on
 else if( Timer_isOn== 1 && AC_Available==1)
 {
 // flashing fast
 Delay_ms(500);
-//Grid_indicator=1;
+Grid_indicator=1;
 Delay_ms(500);
-//Grid_indicator=0;
+Grid_indicator=0;
 }
 //-> to indicate out of range
 else if (Timer_isOn==0 && AC_Available==1 && RunOnBatteryVoltageWithoutTimer_Flag==0)
 {
 // flashing stop
-//Grid_indicator=0;
+Grid_indicator=0;
 
 }
 else if (AC_Available==0)
 {
-//Grid_indicator=1;
+Grid_indicator=1;
 }
 }
 //********************************System Battery Mode 12V/24/48------------------
@@ -2121,7 +2481,7 @@ Delay_ms(200);
 while (esc!=255)
 {
 esc++;
-Display_On_7Segment_Character(0xC1,0x79,0x99);       // v1.4
+Display_On_7Segment_Character(0xC1,0xA4,0xC0);       // v2.0
 }
 esc=0;
 Delay_ms(200);
@@ -2239,21 +2599,29 @@ Display_OnJustOne_7Segment_Character(0xDF,0x00,0x00);
  timeout=0;
  Delay_ms(1000);
 }
-
+//********************************SMART MODE************************************
 //---------------------------------Block Loads----------------------------------
 //-> this function is used to block loads to start again in smart mode
 void BlockLoads()
 {
 // if number of fails bigger than set point must enter block mode
+//--------------------------------BLOCK MODE FOR TIMER 1------------------------
 if (SmartModeNumberOfFails>= SmartModeFailsUserDefined && SmartModePeriodOfFailsInMinutes<SmartModeWatchTimerUserDefined
 && SmartModeNumberOfStartUps==1)
 {
 BlockLoadsActivation=1; // block loads so don't start until time occured
 }
+//-------------------------------BLOCK MODE TIMER 2-----------------------------
+if (SmartModeNumberOfFails_T2>= SmartModeFailsUserDefined && SmartModePeriodOfFailsInMinutes_T2<SmartModeWatchTimerUserDefined
+&& SmartModeNumberOfStartUps_T2==1)
+{
+BlockLoadsActivation_T2=1; // block loads so don't start until time occured
+}
 }
 //---------------------------Timing in Smart Mode-------------------------------
 void SmartModeTiming()
 {
+//*********************************TIMER 1**************************************
 if (SmartModeStartCountTime==1)
 {
 SmartModePeriodOfFailsInSeconds++;
@@ -2263,7 +2631,18 @@ if (SmartModePeriodOfFailsInSeconds==59 )
  SmartModePeriodOfFailsInMinutes++ ;  SmartModePeriodOfFailsInSeconds = 0 ;
  }
 }
-//------------------------------------------------------------------------------
+//*******************************TIMER 2****************************************
+if (SmartModeStartCountTime_T2==1)
+{
+SmartModePeriodOfFailsInSeconds_T2++;
+//-> convert seconds to minutes
+if (SmartModePeriodOfFailsInSeconds_T2==59 )
+{
+ SmartModePeriodOfFailsInMinutes_T2++ ;  SmartModePeriodOfFailsInSeconds_T2 = 0 ;
+ }
+}
+//-------------------------------STAGE 1 ---------------------------------------
+//*******************************TIMER 1 ***************************************
 // stage 1 is to watch fails timer if time is elapsed end this stage or if the fails number
 if (SmartModePeriodOfFailsInMinutes==SmartModeWatchTimerUserDefined || SmartModeNumberOfFails>=SmartModeFailsUserDefined)
 {
@@ -2277,7 +2656,21 @@ SmartModeNumberOfStartUps=0;
 //-> start next stage and this is the period to reactive
 SmartModeBlockCountTime=1 ;
 }
-//------------------------------------------------------------------------------
+//******************************TIMER 2*****************************************
+if (SmartModePeriodOfFailsInMinutes_T2==SmartModeWatchTimerUserDefined || SmartModeNumberOfFails_T2>=SmartModeFailsUserDefined)
+{
+SmartModePeriodOfFailsInMinutes_T2=0;     // to zero
+SmartModePeriodOfFailsInSeconds_T2=0; // to zero
+SmartModeStartCountTime_T2=0;
+
+//-> time is elapsed for watching the fails times so make this variable zero
+SmartModeNumberOfFails_T2=0;
+SmartModeNumberOfStartUps_T2=0;
+//-> start next stage and this is the period to reactive
+SmartModeBlockCountTime_T2=1 ;
+}
+//-------------------------------STAGE 2----------------------------------------
+//*******************************TIMER 1****************************************
 // stage 2 watching
 if (SmartModeBlockCountTime==1)
 {
@@ -2290,7 +2683,21 @@ SmartModePeriodToReStartInMinutes++ ;
 SmartModePeriodToReStartInSeconds=0 ;     // make seconds zero to restart counting
 }
 }
-//------------------------------------------------------------------------------
+//******************************TIMER 2*****************************************
+if (SmartModeBlockCountTime_T2==1)
+{
+SmartModePeriodToReStartInSeconds_T2++;
+
+//-> convert seconds to minutes
+if (SmartModePeriodToReStartInSeconds_T2==59 )
+{
+SmartModePeriodToReStartInMinutes_T2++ ;
+SmartModePeriodToReStartInSeconds_T2=0 ;     // make seconds zero to restart counting
+}
+}
+//-----------------------------STAGE 3 -----------------------------------------
+//-> TIME IS ELAPSED
+//******************************TIMER 1*****************************************
 if (SmartModePeriodToReStartInMinutes==SmartModeBlockTimerUserDefined)
 {
 BlockLoadsActivation=0;
@@ -2300,6 +2707,16 @@ SmartModePeriodToReStartInMinutes=0;
 SmartModeNumberOfFails=0;
 SmartModeNumberOfStartUps=0;
 }
+//*****************************TIMER 2******************************************
+if (SmartModePeriodToReStartInMinutes_T2==SmartModeBlockTimerUserDefined)
+{
+BlockLoadsActivation_T2=0;
+SmartModeBlockCountTime_T2=0 ;
+SmartModePeriodToReStartInSeconds_T2=0;
+SmartModePeriodToReStartInMinutes_T2=0;
+SmartModeNumberOfFails_T2=0;
+SmartModeNumberOfStartUps_T2=0;
+}
 }  //end function
 //******************************************************************************
 void main() {
@@ -2308,10 +2725,14 @@ EEPROM_Load(); // load params programs
 ADCBattery(); // adc configuartion for adc
 TWI_Config();
 Config_Interrupts();
-ReadBytesFromEEprom(0x04,(unsigned short *)&Mini_Battery_Voltage,4);       // Loads will cut of this voltgage
-ReadBytesFromEEprom(0x08,(unsigned short *)&StartLoadsVoltage,4);         //Loads will start based on this voltage
+ReadBytesFromEEprom(0x04,(unsigned short *)&Mini_Battery_Voltage,4);         // Loads will cut of this voltgage
+ReadBytesFromEEprom(0x33,(unsigned short *)&Mini_Battery_Voltage_2,4);       // Loads will cut of this voltgage
+ReadBytesFromEEprom(0x08,(unsigned short *)&StartLoadsVoltage,4);            //Loads will start based on this voltage
+ReadBytesFromEEprom(0x37,(unsigned short *)&StartLoadsVoltage_T2,4);         //Loads will start based on this voltage
 ReadBytesFromEEprom(0x12,(unsigned short *)&startupTIme_1,2);
+ReadBytesFromEEprom(0x41,(unsigned short *)&startupTIme_2,2);               // startup timer 2
 ReadBytesFromEEprom(0x15,(unsigned short *)&Cut_Time,2);
+ReadBytesFromEEprom(0x43,(unsigned short *)&Cut_Time_T2,2);
 ReadBytesFromEEprom(0x19,(unsigned short *)&VinBatteryDifference,4);         //Loads will start based on this voltage
 LoadingScreen();
 WelcomeScreen();
@@ -2333,4 +2754,5 @@ WDT_Disable();
 TurnLoadsOffWhenGridOff();       // sometine when grid comes fast and cut it will not make interrupt so this second check for loads off
 Delay_ms(200);
 }
+
 }
